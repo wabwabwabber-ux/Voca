@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Voca | AI Linguistics Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="app" data-view="translate">
+    <header class="app-header">
+      <div class="logo" aria-label="Voca">Voca</div>
+    </header>
+
+    <main class="view-port">
+      <div class="view-track" id="viewTrack">
+        <section class="view history-view" aria-label="History">
+          <div class="history-list" id="historyList">
+            <div class="empty-state">No translations yet.</div>
+          </div>
+        </section>
+
+        <section class="view translate-view" aria-label="Translate">
+          <select class="language-pill" id="languageSelect" aria-label="Choose speaking language">
+            {% for key, language in languages.items() %}
+              <option value="{{ key }}">{{ language.flag }} {{ language.label }}</option>
+            {% endfor %}
+          </select>
+
+          <section class="translation-card" id="translationCard" aria-live="polite">
+            <div class="translation-text" id="translationText">Speak to begin.</div>
+          </section>
+
+          <section class="text-drawer" id="textDrawer" aria-hidden="true">
+            <textarea id="transcriptInput" maxlength="4000" placeholder="Type instead..."></textarea>
+            <button class="icon-button send-icon" id="sendButton" type="button" aria-label="Send typed text"></button>
+          </section>
+
+          <section class="mic-zone" aria-label="Voice controls">
+            <button class="icon-button trash-icon" id="clearButton" type="button" aria-label="Clear current translation"></button>
+            <button class="mic-button" id="micButton" type="button" aria-pressed="false" aria-label="Start speech recognition">
+              <span class="mic-ring"></span>
+              <span class="mic-icon" aria-hidden="true"></span>
+            </button>
+            <button class="icon-button keyboard-icon" id="keyboardButton" type="button" aria-label="Open text input"></button>
+          </section>
+        </section>
+
+        <section class="view settings-view" aria-label="Settings">
+          <div class="settings-list">
+            <div class="setting-row">
+              <span>Dark Mode</span>
+              <button class="switch" id="darkModeSwitch" type="button" aria-pressed="false"><span></span></button>
+            </div>
+            <div class="setting-row">
+              <span>Auto Replay</span>
+              <button class="switch is-on" id="autoSpeakSwitch" type="button" aria-pressed="true"><span></span></button>
+            </div>
+            <div class="setting-row">
+              <span>Haptics</span>
+              <button class="switch is-on" id="hapticsSwitch" type="button" aria-pressed="true"><span></span></button>
+            </div>
+            <div class="setting-row slider-row">
+              <span>Text-to-Speech Speed</span>
+              <input id="speechRate" type="range" min="0.7" max="1.3" step="0.05" value="1" aria-label="Text-to-speech speed">
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <nav class="bottom-dock" aria-label="Primary">
+      <button class="dock-item" data-target="history" type="button" aria-label="History">
+        <span class="dock-icon history-icon"></span>
+        <span>History</span>
+      </button>
+      <button class="dock-item is-active" data-target="translate" type="button" aria-label="Translate">
+        <span class="dock-icon translate-icon"></span>
+        <span>Translate</span>
+      </button>
+      <button class="dock-item" data-target="settings" type="button" aria-label="Settings">
+        <span class="dock-icon settings-icon"></span>
+        <span>Settings</span>
+      </button>
+    </nav>
+  </div>
+
+  <script>
+    const appRoot = document.querySelector(".app");
+    const viewTrack = document.getElementById("viewTrack");
+    const languageSelect = document.getElementById("languageSelect");
+    const translationText = document.getElementById("translationText");
+    const translationCard = document.getElementById("translationCard");
+    const micButton = document.getElementById("micButton");
+    const clearButton = document.getElementById("clearButton");
+    const keyboardButton = document.getElementById("keyboardButton");
+    const textDrawer = document.getElementById("textDrawer");
+    const transcriptInput = document.getElementById("transcriptInput");
+    const sendButton = document.getElementById("sendButton");
+    const historyList = document.getElementById("historyList");
+    const darkModeSwitch = document.getElementById("darkModeSwitch");
+    const autoSpeakSwitch = document.getElementById("autoSpeakSwitch");
+    const hapticsSwitch = document.getElementById("hapticsSwitch");
+    const speechRate = document.getElementById("speechRate");
+
+    const languageMeta = {
+      amharic: { label: "Amharic", flag: "🇪🇹", speech: "am-ET" },
+      oromo: { label: "Oromo", flag: "🇪🇹", speech: "om-ET" },
+      somali: { label: "Somali", flag: "🇸🇴", speech: "so-SO" },
+      swahili: { label: "Swahili", flag: "🇰🇪", speech: "sw-KE" },
+      bengali: { label: "Bengali", flag: "🇧🇩", speech: "bn-BD" },
+      urdu: { label: "Urdu", flag: "🇵🇰", speech: "ur-PK" },
+      tamil: { label: "Tamil", flag: "🇮🇳", speech: "ta-IN" },
+      burmese: { label: "Burmese", flag: "🇲🇲", speech: "my-MM" },
+      khmer: { label: "Khmer", flag: "🇰🇭", speech: "km-KH" },
+      kazakh: { label: "Kazakh", flag: "🇰🇿", speech: "kk-KZ" },
+    };
+
+    const viewIndex = { history: 0, translate: 1, settings: 2 };
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    const state = {
+      view: "translate",
+      listening: false,
+      textDrawerOpen: false,
+      eventSource: null,
+      recognition: null,
+      typeQueue: "",
+      typeTimer: null,
+      output: "",
+      englishSource: "",
+      history: [],
+      settings: {
+        darkMode: false,
+        autoSpeak: true,
+        haptics: true,
+        speechRate: 1,
+      },
+    };
+
+    function meta() {
+      return languageMeta[languageSelect.value] || languageMeta.amharic;
+    }
+
+    function vibrate() {
+      if (state.settings.haptics && navigator.vibrate) {
+        navigator.vibrate(10);
+      }
+    }
+
+    function switchView(view) {
+      state.view = view;
+      appRoot.dataset.view = view;
+      viewTrack.style.transform = `translateX(-${viewIndex[view] * 100}%)`;
+      document.querySelectorAll(".dock-item").forEach((item) => {
+        item.classList.toggle("is-active", item.dataset.target === view);
+      });
+    }
+
+    function setListening(active) {
+      state.listening = active;
+      document.body.classList.toggle("is-listening", active);
+      micButton.classList.toggle("is-active", active);
+      micButton.setAttribute("aria-pressed", String(active));
+    }
+
+    function resetOutput(text = "Speak to begin.") {
+      window.clearInterval(state.typeTimer);
+      state.typeTimer = null;
+      state.typeQueue = "";
+      state.output = "";
+      state.englishSource = "";
+      translationText.textContent = text;
+    }
+
+    function enqueueText(text) {
+      state.typeQueue += `${text.trim()} `;
+      if (!state.output) {
+        translationText.textContent = "";
+      }
+      if (state.typeTimer) {
+        return;
+      }
+
+      state.typeTimer = window.setInterval(() => {
+        if (!state.typeQueue.length) {
+          window.clearInterval(state.typeTimer);
+          state.typeTimer = null;
+          return;
+        }
+
+        const next = state.typeQueue.charAt(0);
+        state.output += next;
+        translationText.textContent += next;
+        state.typeQueue = state.typeQueue.slice(1);
+      }, 13);
+    }
+
+    function closeStream() {
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
+      translationCard.classList.remove("is-streaming");
+    }
+
+    function summarizeEnglish(text) {
+      const clean = (text || "Translation").trim();
+      return clean.length > 96 ? `${clean.slice(0, 96)}...` : clean;
+    }
+
+    function renderHistory() {
+      if (!state.history.length) {
+        historyList.innerHTML = `<div class="empty-state">No translations yet.</div>`;
+        return;
+      }
+
+      historyList.innerHTML = state.history.map((item, index) => `
+        <article class="history-card">
+          <div class="history-flag">${item.flag}</div>
+          <div class="history-copy">${item.summary}</div>
+          <button class="replay-button" data-index="${index}" type="button">Replay</button>
+        </article>
+      `).join("");
+    }
+
+    function saveHistory() {
+      const output = state.output.trim();
+      if (!output) {
+        return;
+      }
+
+      const item = {
+        language: meta().label,
+        flag: meta().flag,
+        summary: summarizeEnglish(state.englishSource),
+        output,
+      };
+
+      state.history = [item, ...state.history].slice(0, 12);
+      renderHistory();
+    }
+
+    function speak(text) {
+      if (!state.settings.autoSpeak || !("speechSynthesis" in window) || !text.trim()) {
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = meta().speech;
+      utterance.rate = Number(state.settings.speechRate);
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function streamResponse(message) {
+      const cleanMessage = message.trim();
+      if (!cleanMessage) {
+        resetOutput("Speak or type something first.");
+        return;
+      }
+
+      closeStream();
+      resetOutput("");
+      translationCard.classList.add("is-streaming");
+
+      const params = new URLSearchParams({
+        message: cleanMessage,
+        language: languageSelect.value,
+      });
+
+      state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
+
+      state.eventSource.addEventListener("status", (event) => {
+        const data = JSON.parse(event.data);
+        if (!state.output) {
+          translationText.textContent = data.message;
+        }
+      });
+
+      state.eventSource.addEventListener("source", (event) => {
+        const data = JSON.parse(event.data);
+        state.englishSource = data.english || "";
+      });
+
+      state.eventSource.addEventListener("chunk", (event) => {
+        const data = JSON.parse(event.data);
+        enqueueText(data.text);
+      });
+
+      state.eventSource.addEventListener("done", () => {
+        window.setTimeout(() => {
+          saveHistory();
+          speak(state.output);
+        }, 220);
+        closeStream();
+      });
+
+      state.eventSource.addEventListener("voca-error", (event) => {
+        const data = JSON.parse(event.data);
+        translationText.textContent = [data.message, data.stage, data.detail].filter(Boolean).join(" • ");
+        closeStream();
+      });
+
+      state.eventSource.onerror = () => {
+        if (state.eventSource) {
+          translationText.textContent = "Connection closed. Try again.";
+          closeStream();
+        }
+      };
+    }
+
+    function setupSpeech() {
+      if (!SpeechRecognition) {
+        micButton.disabled = true;
+        translationText.textContent = "Speech recognition is unavailable. Use the keyboard icon.";
+        return;
+      }
+
+      state.recognition = new SpeechRecognition();
+      state.recognition.continuous = false;
+      state.recognition.interimResults = true;
+      state.recognition.maxAlternatives = 1;
+      state.recognition.lang = meta().speech;
+
+      state.recognition.onstart = () => setListening(true);
+      state.recognition.onend = () => setListening(false);
+      state.recognition.onerror = (event) => {
+        translationText.textContent = `Speech error: ${event.error}`;
+      };
+
+      state.recognition.onresult = (event) => {
+        let finalText = "";
+        let interimText = "";
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const transcript = event.results[index][0].transcript;
+          if (event.results[index].isFinal) {
+            finalText += transcript;
+          } else {
+            interimText += transcript;
+          }
+        }
+
+        transcriptInput.value = (finalText || interimText).trim();
+        if (finalText.trim()) {
+          streamResponse(finalText);
+        }
+      };
+    }
+
+    function toggleSwitch(button, key) {
+      state.settings[key] = !state.settings[key];
+      button.classList.toggle("is-on", state.settings[key]);
+      button.setAttribute("aria-pressed", String(state.settings[key]));
+    }
+
+    document.querySelectorAll(".dock-item").forEach((item) => {
+      item.addEventListener("click", () => switchView(item.dataset.target));
+    });
+
+    micButton.addEventListener("click", () => {
+      vibrate();
+      if (!state.recognition) {
+        state.textDrawerOpen = true;
+        textDrawer.classList.add("is-open");
+        transcriptInput.focus();
+        return;
+      }
+
+      if (state.listening) {
+        state.recognition.stop();
+      } else {
+        closeStream();
+        resetOutput("Listening...");
+        state.recognition.lang = meta().speech;
+        state.recognition.start();
+      }
+    });
+
+    clearButton.addEventListener("click", () => {
+      vibrate();
+      closeStream();
+      transcriptInput.value = "";
+      resetOutput();
+    });
+
+    keyboardButton.addEventListener("click", () => {
+      vibrate();
+      state.textDrawerOpen = !state.textDrawerOpen;
+      textDrawer.classList.toggle("is-open", state.textDrawerOpen);
+      textDrawer.setAttribute("aria-hidden", String(!state.textDrawerOpen));
+      if (state.textDrawerOpen) {
+        transcriptInput.focus();
+      }
+    });
+
+    sendButton.addEventListener("click", () => {
+      vibrate();
+      streamResponse(transcriptInput.value);
+    });
+
+    transcriptInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        streamResponse(transcriptInput.value);
+      }
+    });
+
+    languageSelect.addEventListener("change", () => {
+      if (state.recognition) {
+        state.recognition.lang = meta().speech;
+      }
+    });
+
+    historyList.addEventListener("click", (event) => {
+      const replay = event.target.closest(".replay-button");
+      if (!replay) {
+        return;
+      }
+
+      const item = state.history[Number(replay.dataset.index)];
+      if (!item) {
+        return;
+      }
+
+      switchView("translate");
+      resetOutput(item.output);
+      state.output = item.output;
+      speak(item.output);
+    });
+
+    darkModeSwitch.addEventListener("click", () => {
+      toggleSwitch(darkModeSwitch, "darkMode");
+      document.body.classList.toggle("dark-mode", state.settings.darkMode);
+    });
+
+    autoSpeakSwitch.addEventListener("click", () => toggleSwitch(autoSpeakSwitch, "autoSpeak"));
+    hapticsSwitch.addEventListener("click", () => toggleSwitch(hapticsSwitch, "haptics"));
+    speechRate.addEventListener("input", () => {
+      state.settings.speechRate = speechRate.value;
+    });
+
+    setupSpeech();
+    renderHistory();
+    switchView("translate");
+  </script>
+</body>
+</html>
