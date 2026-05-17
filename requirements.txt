@@ -1,0 +1,5 @@
+flask>=3.0.0
+google-generativeai>=0.8.0
+deep-translator>=1.11.0
+gunicorn>=22.0.0
+gevent>=24.0.0
