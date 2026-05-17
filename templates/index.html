@@ -2,9 +2,7 @@
 <html lang="en">
 <head>
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo.png') }}">
-
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='logo.png') }}">
-
   <meta name="mobile-web-app-capable" content="yes">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -113,15 +111,15 @@
 
     const languageMeta = {
       amharic: { label: "Amharic", flag: "🇪🇹", speech: "am-ET" },
-      oromo: { label: "Oromo", flag: "🇪🇹", speech: "om-ET" },
-      somali: { label: "Somali", flag: "🇸🇴", speech: "so-SO" },
+      oromo:   { label: "Oromo",   flag: "🇪🇹", speech: "om-ET" },
+      somali:  { label: "Somali",  flag: "🇸🇴", speech: "so-SO" },
       swahili: { label: "Swahili", flag: "🇰🇪", speech: "sw-KE" },
       bengali: { label: "Bengali", flag: "🇧🇩", speech: "bn-BD" },
-      urdu: { label: "Urdu", flag: "🇵🇰", speech: "ur-PK" },
-      tamil: { label: "Tamil", flag: "🇮🇳", speech: "ta-IN" },
+      urdu:    { label: "Urdu",    flag: "🇵🇰", speech: "ur-PK" },
+      tamil:   { label: "Tamil",   flag: "🇮🇳", speech: "ta-IN" },
       burmese: { label: "Burmese", flag: "🇲🇲", speech: "my-MM" },
-      khmer: { label: "Khmer", flag: "🇰🇭", speech: "km-KH" },
-      kazakh: { label: "Kazakh", flag: "🇰🇿", speech: "kk-KZ" },
+      khmer:   { label: "Khmer",   flag: "🇰🇭", speech: "km-KH" },
+      kazakh:  { label: "Kazakh",  flag: "🇰🇿", speech: "kk-KZ" },
     };
 
     const viewIndex = { history: 0, translate: 1, settings: 2 };
@@ -131,13 +129,13 @@
       view: "translate",
       listening: false,
       textDrawerOpen: false,
-      eventSource: null,
       recognition: null,
       typeQueue: "",
       typeTimer: null,
       output: "",
       englishSource: "",
       history: [],
+      loading: false,
       settings: {
         darkMode: false,
         autoSpeak: true,
@@ -151,9 +149,7 @@
     }
 
     function vibrate() {
-      if (state.settings.haptics && navigator.vibrate) {
-        navigator.vibrate(10);
-      }
+      if (state.settings.haptics && navigator.vibrate) navigator.vibrate(10);
     }
 
     function switchView(view) {
@@ -168,8 +164,14 @@
     function setListening(active) {
       state.listening = active;
       document.body.classList.toggle("is-listening", active);
-      micButton.classList.toggle("is-active", active);
       micButton.setAttribute("aria-pressed", String(active));
+    }
+
+    function setLoading(active) {
+      state.loading = active;
+      micButton.disabled = active;
+      sendButton.disabled = active;
+      translationCard.classList.toggle("is-streaming", active);
     }
 
     function resetOutput(text = "Speak to begin.") {
@@ -181,14 +183,11 @@
       translationText.textContent = text;
     }
 
-    function enqueueText(text) {
-      state.typeQueue += `${text.trim()} `;
-      if (!state.output) {
-        translationText.textContent = "";
-      }
-      if (state.typeTimer) {
-        return;
-      }
+    function typewriterText(text) {
+      window.clearInterval(state.typeTimer);
+      state.typeQueue = text;
+      state.output = "";
+      translationText.textContent = "";
 
       state.typeTimer = window.setInterval(() => {
         if (!state.typeQueue.length) {
@@ -196,20 +195,11 @@
           state.typeTimer = null;
           return;
         }
-
         const next = state.typeQueue.charAt(0);
         state.output += next;
         translationText.textContent += next;
         state.typeQueue = state.typeQueue.slice(1);
       }, 13);
-    }
-
-    function closeStream() {
-      if (state.eventSource) {
-        state.eventSource.close();
-        state.eventSource = null;
-      }
-      translationCard.classList.remove("is-streaming");
     }
 
     function summarizeEnglish(text) {
@@ -222,7 +212,6 @@
         historyList.innerHTML = `<div class="empty-state">No translations yet.</div>`;
         return;
       }
-
       historyList.innerHTML = state.history.map((item, index) => `
         <article class="history-card">
           <div class="history-flag">${item.flag}</div>
@@ -232,28 +221,19 @@
       `).join("");
     }
 
-    function saveHistory() {
-      const output = state.output.trim();
-      if (!output) {
-        return;
-      }
-
-      const item = {
+    function saveHistory(output, englishSource) {
+      if (!output.trim()) return;
+      state.history = [{
         language: meta().label,
         flag: meta().flag,
-        summary: summarizeEnglish(state.englishSource),
+        summary: summarizeEnglish(englishSource),
         output,
-      };
-
-      state.history = [item, ...state.history].slice(0, 12);
+      }, ...state.history].slice(0, 12);
       renderHistory();
     }
 
     function speak(text) {
-      if (!state.settings.autoSpeak || !("speechSynthesis" in window) || !text.trim()) {
-        return;
-      }
-
+      if (!state.settings.autoSpeak || !("speechSynthesis" in window) || !text.trim()) return;
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = meta().speech;
@@ -261,67 +241,51 @@
       window.speechSynthesis.speak(utterance);
     }
 
-    function streamResponse(message) {
+    async function sendMessage(message) {
       const cleanMessage = message.trim();
-      if (!cleanMessage) {
-        resetOutput("Speak or type something first.");
-        return;
-      }
+      if (!cleanMessage || state.loading) return;
 
-      closeStream();
       resetOutput("");
-      translationCard.classList.add("is-streaming");
+      setLoading(true);
+      translationText.textContent = "Translating...";
 
-      const params = new URLSearchParams({
-        message: cleanMessage,
-        language: languageSelect.value,
-      });
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: cleanMessage,
+            language: languageSelect.value,
+          }),
+        });
 
-      state.eventSource = new EventSource(`/api/stream?${params.toString()}`);
+        const data = await response.json();
 
-      state.eventSource.addEventListener("status", (event) => {
-        const data = JSON.parse(event.data);
-        if (!state.output) {
-          translationText.textContent = data.message;
+        if (!response.ok) {
+          const parts = [data.error, data.stage, data.detail].filter(Boolean);
+          translationText.textContent = parts.join(" • ");
+          return;
         }
-      });
 
-      state.eventSource.addEventListener("source", (event) => {
-        const data = JSON.parse(event.data);
-        state.englishSource = data.english || "";
-      });
+        state.englishSource = data.english_input || "";
+        typewriterText(data.response);
 
-      state.eventSource.addEventListener("chunk", (event) => {
-        const data = JSON.parse(event.data);
-        enqueueText(data.text);
-      });
-
-      state.eventSource.addEventListener("done", () => {
         window.setTimeout(() => {
-          saveHistory();
-          speak(state.output);
+          saveHistory(data.response, data.english_input);
+          speak(data.response);
         }, 220);
-        closeStream();
-      });
 
-      state.eventSource.addEventListener("voca-error", (event) => {
-        const data = JSON.parse(event.data);
-        translationText.textContent = [data.message, data.stage, data.detail].filter(Boolean).join(" • ");
-        closeStream();
-      });
-
-      state.eventSource.onerror = () => {
-        if (state.eventSource) {
-          translationText.textContent = "Connection closed. Try again.";
-          closeStream();
-        }
-      };
+      } catch (err) {
+        translationText.textContent = "Network error. Please try again.";
+      } finally {
+        setLoading(false);
+      }
     }
 
     function setupSpeech() {
       if (!SpeechRecognition) {
         micButton.disabled = true;
-        translationText.textContent = "Speech recognition is unavailable. Use the keyboard icon.";
+        translationText.textContent = "Speech recognition unavailable. Use the keyboard icon.";
         return;
       }
 
@@ -340,19 +304,13 @@
       state.recognition.onresult = (event) => {
         let finalText = "";
         let interimText = "";
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const transcript = event.results[index][0].transcript;
-          if (event.results[index].isFinal) {
-            finalText += transcript;
-          } else {
-            interimText += transcript;
-          }
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) finalText += transcript;
+          else interimText += transcript;
         }
-
         transcriptInput.value = (finalText || interimText).trim();
-        if (finalText.trim()) {
-          streamResponse(finalText);
-        }
+        if (finalText.trim()) sendMessage(finalText);
       };
     }
 
@@ -362,10 +320,12 @@
       button.setAttribute("aria-pressed", String(state.settings[key]));
     }
 
+    // Nav
     document.querySelectorAll(".dock-item").forEach((item) => {
       item.addEventListener("click", () => switchView(item.dataset.target));
     });
 
+    // Mic
     micButton.addEventListener("click", () => {
       vibrate();
       if (!state.recognition) {
@@ -374,74 +334,67 @@
         transcriptInput.focus();
         return;
       }
-
       if (state.listening) {
         state.recognition.stop();
       } else {
-        closeStream();
         resetOutput("Listening...");
         state.recognition.lang = meta().speech;
         state.recognition.start();
       }
     });
 
+    // Clear
     clearButton.addEventListener("click", () => {
       vibrate();
-      closeStream();
       transcriptInput.value = "";
       resetOutput();
     });
 
+    // Keyboard toggle
     keyboardButton.addEventListener("click", () => {
       vibrate();
       state.textDrawerOpen = !state.textDrawerOpen;
       textDrawer.classList.toggle("is-open", state.textDrawerOpen);
       textDrawer.setAttribute("aria-hidden", String(!state.textDrawerOpen));
-      if (state.textDrawerOpen) {
-        transcriptInput.focus();
-      }
+      if (state.textDrawerOpen) transcriptInput.focus();
     });
 
+    // Send button
     sendButton.addEventListener("click", () => {
       vibrate();
-      streamResponse(transcriptInput.value);
+      sendMessage(transcriptInput.value);
     });
 
+    // Enter key in textarea
     transcriptInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        streamResponse(transcriptInput.value);
+        sendMessage(transcriptInput.value);
       }
     });
 
+    // Language change
     languageSelect.addEventListener("change", () => {
-      if (state.recognition) {
-        state.recognition.lang = meta().speech;
-      }
+      if (state.recognition) state.recognition.lang = meta().speech;
     });
 
+    // History replay
     historyList.addEventListener("click", (event) => {
       const replay = event.target.closest(".replay-button");
-      if (!replay) {
-        return;
-      }
-
+      if (!replay) return;
       const item = state.history[Number(replay.dataset.index)];
-      if (!item) {
-        return;
-      }
-
+      if (!item) return;
       switchView("translate");
       resetOutput(item.output);
       state.output = item.output;
       speak(item.output);
     });
 
+    // Settings
     darkModeSwitch.addEventListener("click", () => {
       toggleSwitch(darkModeSwitch, "darkMode");
       document.body.classList.toggle("dark-mode", state.settings.darkMode);
     });
-
     autoSpeakSwitch.addEventListener("click", () => toggleSwitch(autoSpeakSwitch, "autoSpeak"));
     hapticsSwitch.addEventListener("click", () => toggleSwitch(hapticsSwitch, "haptics"));
     speechRate.addEventListener("input", () => {
